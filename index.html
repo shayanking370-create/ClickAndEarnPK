@@ -1,447 +1,442 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Click&Earn PKR - Earn Money Online</title>
-  <!-- Supabase JS SDK -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- Tailwind CSS Framework -->
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-900 text-slate-100 min-h-screen font-sans flex flex-col justify-between">
+/* ============================================================
+   CLICK&EARN - front end (talks ONLY to your Supabase)
+   ============================================================ */
+const SUPABASE_URL = "https://flbruzcmuhhxhakdvour.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_zxLPB_25AgRGB-6GQ0isWg_g_7CXyib";
 
-  <!-- NAVIGATION BAR -->
-  <header class="bg-slate-800/90 backdrop-blur-md border-b border-slate-700/80 sticky top-0 z-50 shadow-md">
-    <div class="max-w-5xl mx-auto px-4 py-3 flex justify-between items-center">
-      <div class="flex items-center gap-2">
-        <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-slate-950 font-black text-lg">C</div>
-        <span class="text-xl font-black tracking-tight text-white">Click&Earn <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-bold">PKR</span></span>
-      </div>
+const REWARD = 0.10, AD_SECONDS = 30, DAILY_LIMIT = 100, MIN_WD = 5, COOLDOWN_SEC = 120;
 
-      <!-- Logged-in User Header Options -->
-      <div id="nav-user" class="hidden flex items-center gap-4">
-        <div class="bg-slate-900/80 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm">
-          <span class="text-slate-400 font-medium text-xs">Balance:</span>
-          <span id="user-balance" class="text-emerald-400 font-extrabold text-sm">PKR 0.00</span>
-        </div>
-        <button onclick="logout()" class="text-xs bg-red-600/20 hover:bg-red-600 border border-red-500/30 text-red-300 hover:text-white px-3 py-2 rounded-lg font-bold transition">
-          Logout
-        </button>
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let session = null, profile = null, isAdmin = false, routeLoaded = false;
+
+/* ---------------- helpers ---------------- */
+const $ = id => document.getElementById(id);
+const money = n => "PKR " + Number(n).toFixed(2);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toast(msg, isErr=false){
+  const t = $("toast"); t.textContent = msg; t.className = "toast" + (isErr ? " err" : "");
+  clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.add("hidden"), 4000);
+}
+const fmtTime = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
+const errMsg = e => e?.error?.message || e?.message || "Something went wrong. Try again.";
+function go(h){ if(location.hash === h) route(); else location.hash = h; }
+
+/* ---------------- auth ---------------- */
+async function ensureProfile(){
+  if(!session){ profile=null; isAdmin=false; return; }
+  if(!profile){
+    const { data } = await sb.from("profiles").select("*").eq("id", session.user.id).single();
+    profile = data;
+    const { data: ad } = await sb.from("admins").select("user_id").eq("user_id", session.user.id).maybeSingle();
+    isAdmin = !!ad;
+  }
+}
+async function refreshProfile(){
+  const { data } = await sb.from("profiles").select("*").eq("id", session.user.id).single();
+  profile = data; renderTopbar();
+}
+async function logout(){ await sb.auth.signOut(); profile=null; isAdmin=false; go("#/"); }
+
+/* ---------------- top bar ---------------- */
+function renderTopbar(){
+  const bar = $("topbar");
+  if(!session){ bar.classList.add("hidden"); bar.innerHTML=""; return; }
+  bar.classList.remove("hidden");
+  const links = [
+    ["#/earn","Earn"],["#/withdraw","Withdraw"],["#/history","History"],["#/profile","Profile"]
+  ];
+  if(isAdmin) links.push(["#/admin","⚙️ Admin"]);
+  const cur = (location.hash||"#/earn").split("?")[0];
+  bar.innerHTML = `
+    <div class="logo" onclick="go('#/earn')">💜 Click<span>&Earn</span></div>
+    <nav class="nav">${links.map(([h,t]) => `<a href="${h}" class="${cur===h?'active':''}">${t}</a>`).join("")}</nav>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="balance-pill">${money(profile?.balance ?? 0)}</div>
+      <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+    </div>`;
+}
+
+/* ---------------- ROUTER ---------------- */
+const PROTECTED = ["#/earn","#/profile","#/withdraw","#/history","#/admin"];
+async function route(){
+  const h = (location.hash || "#/").split("?")[0];
+  if(PROTECTED.includes(h) && !session) return go("#/login");
+  if(h === "#/admin" && session && !isAdmin) return go("#/earn");
+  renderTopbar();
+  const views = {
+    "#/": vLanding, "#/login": vLogin, "#/signup": vSignup,
+    "#/earn": vEarn, "#/timer": vTimer, "#/profile": vProfile,
+    "#/withdraw": vWithdraw, "#/history": vHistory, "#/admin": vAdmin
+  };
+  (views[h] || vLanding)();
+}
+window.addEventListener("hashchange", route);
+
+/* ---------------- LANDING ---------------- */
+function vLanding(){
+  if(session) return go("#/earn");
+  $("view").innerHTML = `
+    <div class="hero">
+      <h1>Watch Ads.<br><span>Earn Real PKR.</span></h1>
+      <p>💜 Click&Earn is Pakistan's simplest earning platform. Watch a 30-second ad, earn <b>${money(REWARD)}</b> per task. Withdraw with JazzCash or EasyPaisa.</p>
+      <a class="btn" href="#/signup" style="font-size:17px;padding:14px 34px">Start Earning Free</a>
+      <div class="feature-row">
+        <div class="feature"><div class="emoji">🎯</div><b>30-Second Tasks</b><p>Simple ads, strict timer, instant reward.</p></div>
+        <div class="feature"><div class="emoji">💸</div><b>PKR ${REWARD}/Task</b><p>Up to ${DAILY_LIMIT} tasks every single day.</p></div>
+        <div class="feature"><div class="emoji">📱</div><b>JazzCash & EasyPaisa</b><p>Cash out from just ${money(MIN_WD)}.</p></div>
       </div>
+    </div>`;
+}
+
+/* ---------------- LOGIN ---------------- */
+function vLogin(){
+  $("view").innerHTML = `
+    <div class="auth-box card">
+      <div class="logo-big">💜 Click<span>&Earn</span></div>
+      <h2>Welcome back</h2>
+      <label>Email</label><input id="li-email" type="email" placeholder="you@example.com">
+      <label>Password</label><input id="li-pass" type="password" placeholder="••••••••">
+      <button class="btn btn-block" id="li-btn">Login</button>
+      <div class="auth-switch">No account? <a href="#/signup">Sign up free</a></div>
+    </div>`;
+  $("li-btn").onclick = async () => {
+    const btn = $("li-btn"); btn.disabled = true; btn.textContent = "Logging in…";
+    const { error } = await sb.auth.signInWithPassword({ email: $("li-email").value.trim(), password: $("li-pass").value });
+    btn.disabled = false; btn.textContent = "Login";
+    if(error) return toast(errMsg(error), true);
+    toast("Welcome back! 💜");
+  };
+}
+
+/* ---------------- SIGNUP ---------------- */
+function vSignup(){
+  $("view").innerHTML = `
+    <div class="auth-box card">
+      <div class="logo-big">💜 Click<span>&Earn</span></div>
+      <h2>Create your account</h2>
+      <label>Username</label><input id="su-user" placeholder="e.g. ali_khan">
+      <label>Email</label><input id="su-email" type="email" placeholder="you@example.com">
+      <label>Password (min 6 characters)</label><input id="su-pass" type="password" placeholder="••••••••">
+      <button class="btn btn-block" id="su-btn">Create Account</button>
+      <div class="auth-switch">Have an account? <a href="#/login">Login</a></div>
+    </div>`;
+  $("su-btn").onclick = async () => {
+    const u = $("su-user").value.trim(), e = $("su-email").value.trim(), p = $("su-pass").value;
+    if(!u || !e || p.length < 6) return toast("Fill all fields (password 6+ characters).", true);
+    const btn = $("su-btn"); btn.disabled = true; btn.textContent = "Creating…";
+    const { data, error } = await sb.auth.signUp({ email: e, password: p, options: { data: { username: u } } });
+    btn.disabled = false; btn.textContent = "Create Account";
+    if(error) return toast(errMsg(error), true);
+    if(!data.session) return toast("Account created! Check your email to confirm, then login.", false);
+    toast("Account created! Welcome 💜");
+  };
+}
+
+/* ---------------- EARN PAGE ---------------- */
+let earnPoll = null;
+async function vEarn(){
+  clearInterval(earnPoll);
+  await ensureProfile();
+  $("view").innerHTML = `<div class="loading">Loading tasks…</div>`;
+  const [{ data: tasks }, { data: clicks }, { count: done }] = await Promise.all([
+    sb.from("tasks").select("*").eq("active", true).order("id"),
+    sb.from("task_clicks").select("id,task_id,status,started_at").gte("started_at", new Date(Date.now()-10*60000).toISOString()),
+    sb.from("task_clicks").select("id", { count: "exact", head: true }).eq("status","completed")
+      .gte("claimed_at", new Date().toISOString().slice(0,10))
+  ]);
+  const active = (clicks||[]).find(c => c.status === "active");
+  renderTasks(tasks||[], clicks||[], done||0, active);
+  earnPoll = setInterval(async () => {
+    if((location.hash||"") !== "#/earn") return clearInterval(earnPoll);
+    const [{ data: cl }, { count: dn }] = await Promise.all([
+      sb.from("task_clicks").select("id,task_id,status,started_at").gte("started_at", new Date(Date.now()-10*60000).toISOString()),
+      sb.from("task_clicks").select("id", { count: "exact", head: true }).eq("status","completed")
+        .gte("claimed_at", new Date().toISOString().slice(0,10))
+    ]);
+    renderTasks(tasks||[], cl||[], dn||0, (cl||[]).find(c=>c.status==="active"));
+  }, 10000);
+}
+
+function renderTasks(tasks, clicks, done, active){
+  const lastByTask = {};
+  clicks.forEach(c => { if(!lastByTask[c.task_id] || c.started_at > lastByTask[c.task_id].started_at) lastByTask[c.task_id] = c; });
+  const cards = tasks.map(t => {
+    const last = lastByTask[t.id];
+    const cdLeft = last ? COOLDOWN_SEC - Math.floor((Date.now() - new Date(last.started_at)) / 1000) : 0;
+    const cooling = cdLeft > 0;
+    return `<div class="task-card">
+      <div class="t-head"><span class="t-title">🎬 ${esc(t.title)}</span><span class="t-reward">+${money(REWARD)}</span></div>
+      ${cooling
+        ? `<div class="t-wait">⏳ Unlocks in ${fmtTime(cdLeft)}</div><button class="btn btn-block" disabled>Wait…</button>`
+        : `<button class="btn btn-block" onclick="startTask(${t.id})">▶ Start & Earn</button>`}
+    </div>`;
+  }).join("");
+  $("view").innerHTML = `
+    ${active ? `<div class="resume-banner"><span>⚡ You have a task running! Finish it before starting a new one.</span><button class="btn btn-sm" onclick="go('#/timer')">Resume Timer ⏱</button></div>` : ""}
+    <div class="card">
+      <div class="progress-wrap" style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">📺 Today's Tasks</h2>
+        <span class="muted">${done}/${DAILY_LIMIT} completed today</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, done/DAILY_LIMIT*100)}%"></div></div>
+      <p class="muted" style="margin-top:12px;font-size:13px">Watch each ad for <b>${AD_SECONDS} seconds</b>. Come back early = no reward. Each task re-unlocks after 2 minutes.</p>
     </div>
-  </header>
+    <div class="task-grid">${cards || `<div class="card muted">No tasks available right now.</div>`}</div>`;
+}
 
-  <!-- MAIN CONTAINER -->
-  <main class="max-w-4xl mx-auto px-4 py-8 flex-grow w-full">
+async function startTask(taskId){
+  const { data: task } = await sb.from("tasks").select("*").eq("id", taskId).single();
+  const w = window.open("", "_blank"); // open now so popup blockers don't stop us
+  const { data: clickId, error } = await sb.rpc("start_task", { p_task_id: taskId });
+  if(error){
+    if(w) w.close();
+    return toast(errMsg(error), true);
+  }
+  sessionStorage.setItem("ce_timer", JSON.stringify({
+    click_id: clickId, task_id: taskId, title: task.title, url: task.url, t0: Date.now()
+  }));
+  if(w) w.location.href = task.url;
+  go("#/timer");
+}
 
-    <!-- GLOBAL ALERT BANNER -->
-    <div id="alert-box" class="hidden p-4 mb-6 rounded-xl text-sm font-semibold border shadow-lg transition-all duration-300"></div>
+/* ---------------- TIMER PAGE ---------------- */
+let timerInt = null, visHandler = null;
+function clearTimerStuff(){ clearInterval(timerInt); if(visHandler) document.removeEventListener("visibilitychange", visHandler); }
 
-    <!-- 1. AUTHENTICATION SECTION (SIGNUP / LOGIN) -->
-    <section id="auth-box" class="max-w-md mx-auto bg-slate-800/90 p-6 sm:p-8 rounded-2xl border border-slate-700/80 shadow-2xl">
-      <div class="text-center mb-6">
-        <h2 class="text-2xl font-black text-white">Welcome to Click&Earn</h2>
-        <p class="text-xs text-slate-400 mt-1">Complete simple ad tasks and earn real PKR cash.</p>
-      </div>
+async function vTimer(){
+  clearTimerStuff();
+  const st = JSON.parse(sessionStorage.getItem("ce_timer") || "null");
+  if(!st) return go("#/earn");
+  let cancelled = false;
+  const finish = async (reason) => {
+    if(cancelled) return; cancelled = true; clearTimerStuff();
+    await sb.rpc("cancel_click", { p_click_id: st.click_id });
+    $("timer-ui").innerHTML = `
+      <div class="big-emoji">❌</div>
+      <div class="ring bad">CANCELLED</div>
+      <p class="timer-note">${reason}</p>
+      <button class="btn btn-block" onclick="go('#/earn')">Back to Tasks</button>`;
+  };
 
-      <!-- Auth Tab Switches -->
-      <div class="flex border-b border-slate-700 mb-6">
-        <button id="tab-login-btn" onclick="switchTab('login')" class="flex-1 py-2.5 font-bold text-emerald-400 border-b-2 border-emerald-400 transition">Login</button>
-        <button id="tab-signup-btn" onclick="switchTab('signup')" class="flex-1 py-2.5 font-bold text-slate-400 transition">Sign Up</button>
-      </div>
+  $("view").innerHTML = `
+    <div class="timer-wrap card" id="timer-ui">
+      <div class="big-emoji">🎬</div>
+      <h2>${esc(st.title)}</h2>
+      <p class="timer-note">The ad opened in a new tab. <b>Stay on the ad for ${AD_SECONDS} seconds.</b><br>
+      If you come back here before the timer ends, the reward is cancelled!</p>
+      <div class="ring wait" id="ring">${AD_SECONDS}</div>
+      <button class="btn btn-block" id="giveup" style="background:transparent;border:1px solid var(--border);box-shadow:none">I came back too early — Cancel Task</button>
+    </div>`;
+  $("giveup").onclick = () => finish("You returned before " + AD_SECONDS + " seconds. Task and reward cancelled.");
 
-      <!-- Login Form -->
-      <form id="login-form" onsubmit="handleLogin(event)" class="space-y-4">
-        <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
-          <input type="email" id="login-email" required placeholder="you@example.com" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm focus:outline-none focus:border-emerald-500 text-white placeholder-slate-500">
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Password</label>
-          <input type="password" id="login-password" required placeholder="••••••••" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm focus:outline-none focus:border-emerald-500 text-white placeholder-slate-500">
-        </div>
-        <button type="submit" id="btn-login-submit" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-bold text-sm text-slate-950 transition shadow-lg shadow-emerald-900/30">
-          Login to Dashboard
-        </button>
-      </form>
+  let wasHidden = false;
+  visHandler = () => {
+    if(document.hidden){ wasHidden = true; return; }
+    // user came back to our tab
+    const left = AD_SECONDS - Math.floor((Date.now() - st.t0)/1000);
+    if(left > 0) finish(`You returned after only ${Math.max(1,AD_SECONDS-left)} seconds. Task and reward cancelled.`);
+    else if(!wasHidden) finish(`The ad tab was never opened. Task and reward cancelled.`);
+    else showClaim();
+  };
+  document.addEventListener("visibilitychange", visHandler);
 
-      <!-- Signup Form -->
-      <form id="signup-form" onsubmit="handleSignup(event)" class="space-y-4 hidden">
-        <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Full Name</label>
-          <input type="text" id="signup-name" required placeholder="John Doe" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm focus:outline-none focus:border-emerald-500 text-white placeholder-slate-500">
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Mobile Account No. (Easypaisa/JazzCash)</label>
-          <input type="text" id="signup-phone" placeholder="03001234567" required class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm focus:outline-none focus:border-emerald-500 text-white placeholder-slate-500">
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
-          <input type="email" id="signup-email" required placeholder="you@example.com" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm focus:outline-none focus:border-emerald-500 text-white placeholder-slate-500">
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Password</label>
-          <input type="password" id="signup-password" required placeholder="••••••••" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm focus:outline-none focus:border-emerald-500 text-white placeholder-slate-500">
-        </div>
-        <button type="submit" id="btn-signup-submit" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-bold text-sm text-slate-950 transition shadow-lg shadow-emerald-900/30">
-          Create Account
-        </button>
-      </form>
-    </section>
-
-    <!-- 2. MAIN DASHBOARD SECTION -->
-    <section id="dashboard" class="hidden space-y-6">
-
-      <!-- Navigation Tabs -->
-      <div class="flex border-b border-slate-700 bg-slate-800/50 p-1 rounded-xl border">
-        <button id="dash-tasks-btn" onclick="switchDashboardTab('tasks')" class="flex-1 py-3 font-bold text-emerald-400 bg-slate-800 border border-slate-700 rounded-lg transition shadow">Available Tasks (16)</button>
-        <button id="dash-withdraw-btn" onclick="switchDashboardTab('withdraw')" class="flex-1 py-3 font-bold text-slate-400 transition">Withdraw Funds</button>
-      </div>
-
-      <!-- TASKS TAB -->
-      <div id="tasks-section" class="space-y-4">
-        <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700 flex items-start gap-3">
-          <span class="text-xl">⚠️</span>
-          <p class="text-xs text-slate-300 leading-relaxed">
-            <strong class="text-white font-bold">Rule Instructions:</strong> Click on any task button below to open an advertisement. You must remain on the ad tab for at least <span class="text-emerald-400 font-bold">30 seconds</span>. If you return to this page earlier than 30 seconds, the reward will be cancelled! Completed tasks undergo a 2-minute cooldown.
-          </p>
-        </div>
-
-        <!-- Dynamic Tasks Grid -->
-        <div id="tasks-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <!-- Dynamically populated via JS -->
-        </div>
-      </div>
-
-      <!-- WITHDRAWAL TAB -->
-      <div id="withdraw-section" class="hidden max-w-md mx-auto bg-slate-800/90 p-6 sm:p-8 rounded-2xl border border-slate-700 shadow-xl space-y-5">
-        <div>
-          <h3 class="text-lg font-bold text-white">Request Payout</h3>
-          <p class="text-xs text-slate-400 mt-0.5">Minimum payout limit is <span class="text-emerald-400 font-bold">PKR 10.00</span>.</p>
-        </div>
-        
-        <form onsubmit="handleWithdrawal(event)" class="space-y-4">
-          <div>
-            <label class="block text-xs font-semibold text-slate-300 mb-1">Amount (PKR)</label>
-            <input type="number" id="withdraw-amount" min="10" step="0.1" required placeholder="Minimum 10" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-300 mb-1">Select Payment Provider</label>
-            <select id="withdraw-method" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-emerald-500">
-              <option value="Easypaisa">Easypaisa</option>
-              <option value="JazzCash">JazzCash</option>
-              <option value="Nayapay">Nayapay</option>
-              <option value="Bank">Bank Transfer</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-300 mb-1">Account Number / IBAN</label>
-            <input type="text" id="withdraw-account" placeholder="03001234567" required class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-300 mb-1">Account Holder Title</label>
-            <input type="text" id="withdraw-name" placeholder="Full Account Name" required class="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500">
-          </div>
-          <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded-xl font-bold text-sm text-white transition shadow-lg shadow-blue-900/30">
-            Submit Withdrawal Request
-          </button>
-        </form>
-      </div>
-
-    </section>
-
-  </main>
-
-  <!-- FOOTER -->
-  <footer class="bg-slate-950 border-t border-slate-800 py-4 text-center text-xs text-slate-500">
-    <p>&copy; Click&Earn PKR. All rights reserved.</p>
-  </footer>
-
-  <!-- APPLICATION LOGIC & SUPABASE INTEGRATION -->
-  <script>
-    const SUPABASE_URL = "https://flbruzcmuhhxhakdvour.supabase.co";
-    const SUPABASE_ANON_KEY = "sb_publishable_zxLPB_25AgRGB-6GQ0isWg_g_7CXyib";
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    // 16 MONETAG DIRECT LINKS
-    const MONETAG_LINKS = [
-      "https://omg10.com/4/7349692", "https://omg10.com/4/7349688",
-      "https://omg10.com/4/7393659", "https://omg10.com/4/7343595",
-      "https://omg10.com/4/7349687", "https://omg10.com/4/7351274",
-      "https://omg10.com/4/7349694", "https://omg10.com/4/7349690",
-      "https://omg10.com/4/7349680", "https://omg10.com/4/11831163",
-      "https://omg10.com/4/7393664", "https://omg10.com/4/7346296",
-      "https://omg10.com/4/7349689", "https://omg10.com/4/7345679",
-      "https://omg10.com/4/7382951", "https://omg10.com/4/7393658"
-    ];
-
-    let currentUser = null;
-    let userProfile = { balance: 0.00 };
-    let activeTaskId = null;
-    let taskStartTime = null;
-    let isTaskRunning = false;
-    let taskCooldowns = {};
-
-    window.addEventListener('DOMContentLoaded', async () => {
-      renderTasksGrid();
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          currentUser = session.user;
-          await loadUserProfile();
-          showDashboard();
-        }
-      } catch (err) {
-        console.error("Session check error:", err);
+  function showClaim(){
+    clearTimerStuff();
+    $("timer-ui").innerHTML = `
+      <div class="big-emoji">✅</div>
+      <div class="ring ok">${AD_SECONDS}s DONE!</div>
+      <p class="timer-note">Great! You watched the full ad.<br>Click below to collect your reward.</p>
+      <button class="btn btn-green btn-block" id="claim-btn" style="font-size:17px">💰 Claim ${money(REWARD)}</button>`;
+    $("claim-btn").onclick = async () => {
+      const b = $("claim-btn"); b.disabled = true; b.textContent = "Verifying…";
+      const { data, error } = await sb.rpc("claim_task", { p_click_id: st.click_id });
+      if(error){
+        b.disabled = false; b.textContent = "💰 Try Again";
+        return toast(errMsg(error), true);
       }
+      sessionStorage.removeItem("ce_timer");
+      await refreshProfile();
+      $("timer-ui").innerHTML = `
+        <div class="big-emoji">🎉</div>
+        <div class="ring ok">+${money(REWARD)}</div>
+        <p class="timer-note">Reward added to your balance!<br>New balance: <b>${money(profile.balance)}</b></p>
+        <button class="btn btn-block" onclick="go('#/earn')">Next Task ▶</button>`;
+    };
+  }
+
+  timerInt = setInterval(() => {
+    const left = AD_SECONDS - Math.floor((Date.now() - st.t0)/1000);
+    const ring = $("ring");
+    if(ring) ring.textContent = Math.max(0, left);
+    if(left <= 0 && !cancelled){
+      clearInterval(timerInt);
+      if(!wasHidden) finish(`The ad tab was never opened. Task and reward cancelled.`);
+      // if wasHidden: wait until user returns (visibility handler will showClaim)
+      else { $("timer-ui").insertAdjacentHTML("beforeend", `<p class="timer-note" style="color:var(--green)">✔ ${AD_SECONDS} seconds passed! Return to this tab to claim.</p>`); }
+    }
+  }, 250);
+}
+
+/* ---------------- PROFILE ---------------- */
+async function vProfile(){
+  await ensureProfile();
+  const [{ count: tasksDone }, { data: earned }] = await Promise.all([
+    sb.from("task_clicks").select("id", { count: "exact", head: true }).eq("status","completed"),
+    sb.from("transactions").select("amount").eq("type","earn")
+  ]);
+  const totalEarned = (earned||[]).reduce((s,t) => s + Number(t.amount), 0);
+  $("view").innerHTML = `
+    <h1>👤 My Profile</h1>
+    <div class="grid2">
+      <div class="stat"><div class="lbl">Balance</div><div class="num" style="color:var(--violet2)">${money(profile.balance)}</div></div>
+      <div class="stat"><div class="lbl">Tasks Completed</div><div class="num">${tasksDone||0}</div></div>
+      <div class="stat"><div class="lbl">Total Earned</div><div class="num" style="color:var(--green)">${money(totalEarned)}</div></div>
+      <div class="stat"><div class="lbl">Member Since</div><div class="num" style="font-size:18px">${new Date(profile.created_at).toLocaleDateString()}</div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Account Details</h2>
+      <label>Username</label><input value="${esc(profile.username)}" disabled>
+      <label>Email</label><input value="${esc(session.user.email)}" disabled>
+      <label>Full Name</label><input id="pf-name" value="${esc(profile.full_name)}" placeholder="Your name">
+      <label>JazzCash Number</label><input id="pf-jc" value="${esc(profile.jazzcash)}" placeholder="03xx-xxxxxxx">
+      <label>EasyPaisa Number</label><input id="pf-ep" value="${esc(profile.easypaisa)}" placeholder="03xx-xxxxxxx">
+      <button class="btn" id="pf-save">Save Details</button>
+    </div>`;
+  $("pf-save").onclick = async () => {
+    const { error } = await sb.from("profiles").update({
+      full_name: $("pf-name").value.trim(),
+      jazzcash: $("pf-jc").value.trim(),
+      easypaisa: $("pf-ep").value.trim()
+    }).eq("id", session.user.id);
+    if(error) return toast(errMsg(error), true);
+    profile.full_name = $("pf-name").value.trim(); profile.jazzcash = $("pf-jc").value.trim(); profile.easypaisa = $("pf-ep").value.trim();
+    toast("Saved! 💜");
+  };
+}
+
+/* ---------------- WITHDRAW ---------------- */
+async function vWithdraw(){
+  await ensureProfile();
+  const { data: wds } = await sb.from("withdrawals").select("*").order("created_at", { ascending: false }).limit(20);
+  $("view").innerHTML = `
+    <h1>💸 Withdraw Money</h1>
+    <div class="card">
+      <p class="muted">Available balance</p>
+      <h1 style="color:var(--violet2)">${money(profile.balance)}</h1>
+      <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+      <label>Amount (minimum ${money(MIN_WD)})</label>
+      <input id="wd-amt" type="number" min="${MIN_WD}" step="0.01" placeholder="${MIN_WD}.00">
+      <label>Method</label>
+      <select id="wd-method">
+        <option>JazzCash</option><option>EasyPaisa</option>
+      </select>
+      <label>Account Number</label>
+      <input id="wd-acct" placeholder="03xx-xxxxxxx" value="${esc(profile.jazzcash || profile.easypaisa || "")}">
+      <button class="btn btn-block" id="wd-btn">Request Withdrawal</button>
+      <p class="muted" style="font-size:12px;margin-top:10px">Admin reviews and sends payment manually. You can have only 1 pending request at a time.</p>
+    </div>
+    <div class="card">
+      <h2>My Withdrawals</h2>
+      ${(wds && wds.length) ? `<table><tr><th>Amount</th><th>Method</th><th>Status</th><th>Date</th></tr>
+        ${wds.map(w => `<tr><td>${money(w.amount)}</td><td>${esc(w.method)}</td>
+          <td><span class="badge ${w.status}">${w.status}</span></td>
+          <td class="muted">${new Date(w.created_at).toLocaleDateString()}</td></tr>`).join("")}</table>`
+        : `<p class="muted">No withdrawals yet.</p>`}
+    </div>`;
+  $("wd-btn").onclick = async () => {
+    const amt = parseFloat($("wd-amt").value);
+    if(!amt || amt < MIN_WD) return toast(`Minimum withdrawal is ${money(MIN_WD)}.`, true);
+    if(amt > Number(profile.balance)) return toast("Amount is more than your balance.", true);
+    const b = $("wd-btn"); b.disabled = true; b.textContent = "Submitting…";
+    const { error } = await sb.rpc("request_withdrawal", {
+      p_amount: amt, p_method: $("wd-method").value, p_account: $("wd-acct").value.trim()
     });
+    b.disabled = false; b.textContent = "Request Withdrawal";
+    if(error) return toast(errMsg(error), true);
+    toast("Withdrawal requested! Admin will send your payment soon. 💜");
+    vWithdraw();
+  };
+}
 
-    function renderTasksGrid() {
-      const grid = document.getElementById('tasks-grid');
-      grid.innerHTML = '';
+/* ---------------- HISTORY ---------------- */
+async function vHistory(){
+  await ensureProfile();
+  const { data: txs } = await sb.from("transactions").select("*").order("created_at", { ascending: false }).limit(50);
+  $("view").innerHTML = `
+    <h1>📜 Earning History</h1>
+    <div class="card">
+      ${(txs && txs.length) ? `<table><tr><th>Type</th><th>Amount</th><th>Note</th><th>Date</th></tr>
+        ${txs.map(t => `<tr>
+          <td><span class="badge ${{earn:'earn',withdraw_hold:'hold',withdraw_refund:'refund'}[t.type]}">${t.type.replace('withdraw_','')}</span></td>
+          <td style="color:${t.type==='earn'?'var(--green)':'var(--yellow)'}">${t.type==='earn'?'+':'-'}${money(t.amount)}</td>
+          <td class="muted">${esc(t.note)}</td>
+          <td class="muted">${new Date(t.created_at).toLocaleString()}</td></tr>`).join("")}</table>`
+        : `<p class="muted">No activity yet. Go earn! 🎬</p>`}
+    </div>`;
+}
 
-      MONETAG_LINKS.forEach((link, index) => {
-        const taskId = index + 1;
-        const isCooldown = taskCooldowns[taskId] && Date.now() < taskCooldowns[taskId];
+/* ---------------- ADMIN ---------------- */
+async function vAdmin(){
+  await ensureProfile();
+  const { data: wds } = await sb.from("withdrawals")
+    .select("*")
+    .order("created_at", { ascending: false }).limit(100);
+  // fetch usernames separately (simple + reliable)
+  const rows = [];
+  for(const w of (wds||[])){
+    const { data: p } = await sb.from("profiles").select("username").eq("id", w.user_id).single();
+    rows.push({ ...w, username: p?.username || w.user_id.slice(0,8) });
+  }
+  const pending = rows.filter(w => w.status === "pending");
+  $("view").innerHTML = `
+    <h1>⚙️ Admin Panel</h1>
+    <div class="card">
+      <h2>🔔 Pending Withdrawals (${pending.length})</h2>
+      ${pending.length ? `<table><tr><th>User</th><th>Amount</th><th>Method</th><th>Account</th><th>Actions</th></tr>
+        ${pending.map(w => `<tr>
+          <td>${esc(w.username)}</td><td><b>${money(w.amount)}</b></td>
+          <td>${esc(w.method)}</td><td>${esc(w.account_number)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-green btn-sm" onclick="adminAct(${w.id},'approve')">✔ Paid</button>
+            <button class="btn btn-red btn-sm" onclick="adminAct(${w.id},'reject')">✖ Reject</button>
+          </td></tr>`).join("")}</table>`
+        : `<p class="muted">No pending requests. 🎉</p>`}
+      <p class="muted" style="font-size:12px;margin-top:10px">👉 Send the money manually with JazzCash/EasyPaisa app first, THEN press "✔ Paid".</p>
+    </div>
+    <div class="card">
+      <h2>📋 All Requests</h2>
+      ${rows.length ? `<table><tr><th>User</th><th>Amount</th><th>Status</th><th>Date</th></tr>
+        ${rows.map(w => `<tr><td>${esc(w.username)}</td><td>${money(w.amount)}</td>
+          <td><span class="badge ${w.status}">${w.status}</span></td>
+          <td class="muted">${new Date(w.created_at).toLocaleDateString()}</td></tr>`).join("")}</table>`
+        : `<p class="muted">Nothing yet.</p>`}
+    </div>`;
+}
 
-        grid.innerHTML += `
-          <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700/80 shadow flex flex-col justify-between space-y-3">
-            <div class="flex justify-between items-center">
-              <span class="font-bold text-slate-200 text-sm">Ad Task #${taskId}</span>
-              <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-bold">+PKR 0.10</span>
-            </div>
-            <button id="task-btn-${taskId}" onclick="startTask(${taskId}, '${link}')" 
-              ${isCooldown ? 'disabled' : ''}
-              class="w-full ${isCooldown ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black'} py-2.5 rounded-lg text-xs transition">
-              ${isCooldown ? 'In Cooldown (2m)' : 'Open Ad & Earn (30s)'}
-            </button>
-          </div>
-        `;
-      });
-    }
+async function adminAct(id, action){
+  if(action === "approve"){
+    if(!confirm(`Confirm you ALREADY sent the money for withdrawal #${id}?`)) return;
+    const { error } = await sb.rpc("admin_approve", { p_withdrawal_id: id });
+    if(error) return toast(errMsg(error), true);
+    toast("Marked as PAID ✔");
+  } else {
+    const reason = prompt("Reason for rejection (user gets refunded):") || "";
+    const { error } = await sb.rpc("admin_reject", { p_withdrawal_id: id, p_reason: reason });
+    if(error) return toast(errMsg(error), true);
+    toast("Rejected & refunded ✖");
+  }
+  vAdmin();
+}
 
-    function switchTab(tab) {
-      if (tab === 'login') {
-        document.getElementById('login-form').classList.remove('hidden');
-        document.getElementById('signup-form').classList.add('hidden');
-        document.getElementById('tab-login-btn').className = "flex-1 py-2.5 font-bold text-emerald-400 border-b-2 border-emerald-400 transition";
-        document.getElementById('tab-signup-btn').className = "flex-1 py-2.5 font-bold text-slate-400 transition";
-      } else {
-        document.getElementById('login-form').classList.add('hidden');
-        document.getElementById('signup-form').classList.remove('hidden');
-        document.getElementById('tab-signup-btn').className = "flex-1 py-2.5 font-bold text-emerald-400 border-b-2 border-emerald-400 transition";
-        document.getElementById('tab-login-btn').className = "flex-1 py-2.5 font-bold text-slate-400 transition";
-      }
-    }
-
-    function switchDashboardTab(tab) {
-      if (tab === 'tasks') {
-        document.getElementById('tasks-section').classList.remove('hidden');
-        document.getElementById('withdraw-section').classList.add('hidden');
-        document.getElementById('dash-tasks-btn').className = "flex-1 py-3 font-bold text-emerald-400 bg-slate-800 border border-slate-700 rounded-lg transition shadow";
-        document.getElementById('dash-withdraw-btn').className = "flex-1 py-3 font-bold text-slate-400 transition";
-      } else {
-        document.getElementById('tasks-section').classList.add('hidden');
-        document.getElementById('withdraw-section').classList.remove('hidden');
-        document.getElementById('dash-withdraw-btn').className = "flex-1 py-3 font-bold text-emerald-400 bg-slate-800 border border-slate-700 rounded-lg transition shadow";
-        document.getElementById('dash-tasks-btn').className = "flex-1 py-3 font-bold text-slate-400 transition";
-      }
-    }
-
-    async function handleSignup(e) {
-      e.preventDefault();
-      const btn = document.getElementById('btn-signup-submit');
-      btn.innerText = "Creating account...";
-      btn.disabled = true;
-
-      const email = document.getElementById('signup-email').value;
-      const password = document.getElementById('signup-password').value;
-      const name = document.getElementById('signup-name').value;
-      const phone = document.getElementById('signup-phone').value;
-
-      try {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { full_name: name, phone_number: phone } }
-        });
-
-        if (error) throw error;
-
-        showAlert("Account created successfully!", 'success');
-        currentUser = data.user;
-        await loadUserProfile();
-        showDashboard();
-      } catch (err) {
-        showAlert(err.message, 'error');
-      } finally {
-        btn.innerText = "Create Account";
-        btn.disabled = false;
-      }
-    }
-
-    async function handleLogin(e) {
-      e.preventDefault();
-      const btn = document.getElementById('btn-login-submit');
-      btn.innerText = "Logging in...";
-      btn.disabled = true;
-
-      const email = document.getElementById('login-email').value;
-      const password = document.getElementById('login-password').value;
-
-      try {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-
-        currentUser = data.user;
-        await loadUserProfile();
-        showDashboard();
-      } catch (err) {
-        showAlert(err.message, 'error');
-      } finally {
-        btn.innerText = "Login to Dashboard";
-        btn.disabled = false;
-      }
-    }
-
-    async function logout() {
-      await supabase.auth.signOut();
-      location.reload();
-    }
-
-    async function loadUserProfile() {
-      try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', currentUser.id)
-          .single();
-
-        if (data) {
-          userProfile = data;
-        }
-      } catch (e) {
-        console.warn("Profile fetch fallback:", e);
-      }
-      document.getElementById('user-balance').innerText = `PKR ${parseFloat(userProfile.balance || 0).toFixed(2)}`;
-    }
-
-    function showDashboard() {
-      document.getElementById('auth-box').classList.add('hidden');
-      document.getElementById('dashboard').classList.remove('hidden');
-      document.getElementById('nav-user').classList.remove('hidden');
-    }
-
-    function startTask(taskId, link) {
-      if (taskCooldowns[taskId] && Date.now() < taskCooldowns[taskId]) {
-        showAlert(`Task #${taskId} is in cooldown. Please wait!`, "error");
-        return;
-      }
-
-      window.open(link, '_blank');
-      activeTaskId = taskId;
-      taskStartTime = Date.now();
-      isTaskRunning = true;
-
-      showAlert(`Ad Task #${taskId} opened. Stay on that ad tab for 30 seconds!`, "info");
-    }
-
-    document.addEventListener("visibilitychange", async () => {
-      if (document.visibilityState === "visible" && isTaskRunning) {
-        const elapsedTime = (Date.now() - taskStartTime) / 1000;
-        isTaskRunning = false;
-
-        if (elapsedTime < 30) {
-          showAlert(`FAILED: Task #${activeTaskId} cancelled! You returned after only ${Math.floor(elapsedTime)}s. Stay on ad tab for 30s.`, "error");
-        } else {
-          await rewardUser(activeTaskId);
-        }
-        activeTaskId = null;
-      }
-    });
-
-    async function rewardUser(taskId) {
-      const currentBal = parseFloat(userProfile.balance || 0);
-      const newBalance = currentBal + 0.10;
-
-      try {
-        await supabase
-          .from('profiles')
-          .update({ balance: newBalance })
-          .eq('id', currentUser.id);
-      } catch (err) {
-        console.error("Balance update warning:", err);
-      }
-
-      showAlert(`SUCCESS! PKR 0.10 awarded for Task #${taskId}.`, "success");
-      userProfile.balance = newBalance;
-      document.getElementById('user-balance').innerText = `PKR ${newBalance.toFixed(2)}`;
-      
-      taskCooldowns[taskId] = Date.now() + 120 * 1000;
-      renderTasksGrid();
-
-      setTimeout(() => {
-        renderTasksGrid();
-      }, 120000);
-    }
-
-    async function handleWithdrawal(e) {
-      e.preventDefault();
-      const amount = parseFloat(document.getElementById('withdraw-amount').value);
-      const method = document.getElementById('withdraw-method').value;
-      const account = document.getElementById('withdraw-account').value;
-      const name = document.getElementById('withdraw-name').value;
-
-      if (amount < 10) {
-        showAlert("Minimum withdrawal amount is PKR 10!", "error");
-        return;
-      }
-
-      if (amount > userProfile.balance) {
-        showAlert("Insufficient balance for this withdrawal!", "error");
-        return;
-      }
-
-      const newBalance = userProfile.balance - amount;
-
-      try {
-        const { error: withdrawError } = await supabase
-          .from('withdrawals')
-          .insert({
-            user_id: currentUser.id,
-            amount,
-            payment_method: method,
-            account_number: account,
-            account_name: name
-          });
-
-        if (withdrawError) throw withdrawError;
-
-        await supabase.from('profiles').update({ balance: newBalance }).eq('id', currentUser.id);
-        
-        userProfile.balance = newBalance;
-        document.getElementById('user-balance').innerText = `PKR ${newBalance.toFixed(2)}`;
-        showAlert("Withdrawal request submitted! It will be reviewed manually.", "success");
-      } catch (err) {
-        showAlert(err.message, "error");
-      }
-    }
-
-    function showAlert(msg, type) {
-      const box = document.getElementById('alert-box');
-      box.classList.remove('hidden', 'bg-red-500/20', 'border-red-500', 'text-red-300', 'bg-emerald-500/20', 'border-emerald-500', 'text-emerald-300', 'bg-blue-500/20', 'border-blue-500', 'text-blue-300');
-      
-      if (type === 'error') {
-        box.classList.add('bg-red-500/20', 'border-red-500', 'text-red-300');
-      } else if (type === 'success') {
-        box.classList.add('bg-emerald-500/20', 'border-emerald-500', 'text-emerald-300');
-      } else {
-        box.classList.add('bg-blue-500/20', 'border-blue-500', 'text-blue-300');
-      }
-      
-      box.innerText = msg;
-    }
-  </script>
-</body>
-</html>
+/* ---------------- INIT ---------------- */
+sb.auth.onAuthStateChange((_e, s) => {
+  session = s;
+  if(!s){ profile = null; isAdmin = false; }
+  else profile = null; // force reload
+  route();
+});
+(async () => {
+  const { data } = await sb.auth.getSession();
+  session = data.session;
+  route();
+})();
